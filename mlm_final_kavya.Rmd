@@ -12,6 +12,12 @@ library(here)
 library(ggplot2)
 library(tidyverse)
 library(lme4)
+library(mice)
+library(broom.mixed)
+library(sjPlot)
+#library(gtsummary)
+#library(labelled)
+library(stats)
 ```
 
 # Loading and formatting data
@@ -23,7 +29,8 @@ data_filt <- data %>%
          scale_name = as.factor(scale_name),
          scored_scale = as.factor(scored_scale),
          SID = as.factor(SID)
-         )
+         )  %>% 
+  janitor::clean_names()
 data_filt <- data_filt %>% 
   filter(!scored_scale %in% c("hs gpa", "senior gpa", "year graduated hs", "age of first drink", "father edu", "first gen yn", "housing", "hs type", "money", "money 1", "mother edu", "pathway"))
 
@@ -52,10 +59,11 @@ data_filt <- data_filt %>%
 # Turn data wide/long?
 ##trying this without the weird scale_time thing 
 data_l <- data_filt %>% 
-  pivot_wider(id_cols = c(SID, time),
+  pivot_wider(id_cols = c(sid, time),
               names_from = scale_name,
               values_from = score) %>% 
-  arrange(SID)
+  arrange(sid) %>% 
+  janitor::clean_names()
 
 
 # data_l$scale_time <- as.factor(data_l$scale_time)
@@ -79,35 +87,35 @@ data_l$NA_col <- NA
 data_l$NA_col <- as.numeric(data_l$NA_col)
 
 data_l <- data_l %>%
-     mutate(ULS_BL = case_when(time == "2" ~ `ULS-8`,
+     mutate(uls_bl = case_when(time == "2" ~ uls_8,
                             TRUE ~ `NA_col`))
 
 data_l <- data_l %>% 
-  group_by(SID) %>% 
-  fill(ULS_BL, .direction = "downup")
+  group_by(sid) %>% 
+  fill(uls_bl, .direction = "downup")
 
 data_l <- data_l %>% 
   select(-NA_col) 
 
 ## filling other demographic stuff
 data_l <- data_l %>% 
-  group_by(SID) %>% 
-  fill(ULS_BL, .direction = "downup")
+  group_by(sid) %>% 
+  fill(uls_bl, .direction = "downup")
 
 ###finalized data set
 data_l <- data_l %>% 
-  group_by(SID) %>% 
+  group_by(sid) %>% 
   fill(gender, .direction = "downup")
 data_l <- data_l %>% 
-  group_by(SID) %>% 
+  group_by(sid) %>% 
   fill(hispanic, .direction = "downup")
 data_l <- data_l %>% 
-  group_by(SID) %>% 
+  group_by(sid) %>% 
   fill(sex, .direction = "downup")
 
 ## removing some variables
 data_l <- data_l %>% 
-  select(- `ethnicity text`)
+  select(- ethnicity_text)
 
 
 ## time as numeric
@@ -139,36 +147,27 @@ data_l %>%
 #Rutgers Marijuana Problematic Inventory
  data_filt %>%
    filter(scale_name == "RMPI") %>%
-   select(SID, time, survey_name, n_items) %>%
+   select(sid, time, survey_name, n_items) %>%
    group_by(n_items) %>%
    count() #RMPI - 852 missing, 325 completed
-
 data_filt %>% 
   filter(scale_name == "RMPI") %>% 
-  select(SID, time, survey_name, n_items) %>% 
+  select(sid, time, survey_name, n_items) %>% 
   group_by(n_items, time) %>% 
-  count()
-
-data_filt %>% 
-  filter(scale_name == "RMPI") %>% 
-  ggplot(aes(x = score)) +
-  geom_histogram()
-
-
+  count() #missing at all timepoints, not just 1
 
 #Loneliness Scale
 ##n_items completed
 data_filt %>% 
   filter(scale_name == "ULS-8") %>% 
-  select(SID, time, survey_name, n_items) %>% 
+  select(sid, time, survey_name, n_items) %>% 
   group_by(n_items) %>% 
-  count()#ULS-8 not collected at T1. 1161 completed, 12 not completed
-##n_items completed by timepoint
+  count()#906 completed, 11 not completed
 data_filt %>% 
   filter(scale_name == "ULS-8") %>% 
-  select(SID, time, survey_name, n_items) %>% 
+  select(sid, time, survey_name, n_items) %>% 
   group_by(n_items, time) %>% 
-  count() 
+  count() #ULS-8 not collected at T1.
 
 ##change the dataset so that the score for 0 items filled = NA
 data_filt$score[data_filt$n_items == 0] <- NA
@@ -176,57 +175,61 @@ data_filt$score[data_filt$n_items == 0] <- NA
 naniar::vis_miss(data_filt) #3% missing data in total, 28% scores missing
 naniar::vis_miss(data_l) #73% missing data for RMPI .... that's a lot of missing data. Might be most appropriate to impute data.
 
-##Number of completers at each timepoint 
+## Number of completers at each timepoint 
 data_filt %>% 
   filter(scale_name == "ULS-8") %>% 
-  select(SID, time, survey_name, n_items) %>% 
+  select(sid, time, survey_name, n_items) %>% 
   group_by(n_items, time) %>% 
   count() 
-
-
-##Less missing data if there are less timepoints?
+### Less missing data if there are less timepoints? Nope
 data_short <- data_l %>% 
   filter(time == 1| time == 5)
 naniar::vis_miss(data_short)
-
 ```
+# Multiple Imputations for Missing Data
 ```{r}
-library(mice)
-# imp <- mice(data_l, m = 5)
-# imp <- mice(data_l, me = c("polyreg", "polyreg", "pmm", "pmm","pmm","pmm","pmm","pmm"))
 
+set.seed(1234)
+imp <- mice(data_l, m = 5, print = FALSE)
+view(imp)
+imp$imp$age
+imp$imp$rmpi
+# imp <- mice(data_l, me = c("polyreg", "polyreg", "pmm", "pmm","pmm","pmm","pmm","pmm"))
 ## Unable to impute the data. Receiving error: Error in terms.formula(tmp, simplify = TRUE) : invalid model formula in ExtractVars
+
+com <- complete(imp, "long")
+
+#https://strengejacke.github.io/sjmisc/reference/merge_imputations.html
+#install.packages("sjmisc")
+subject_id <- data_l %>% select(sid, time)
+new_imp <- sjmisc::merge_imputations(
+  data_l,
+  imp,
+  ori = subject_id,
+  summary = c("none", "dens", "hist", "sd"),
+  filter = NULL
+) #use this dataframe to run the new imputed analyses and also be able to check for normality assumptions 
 ```
 
 # Exploratory and descriptive analyses: 3 points
 
 >One of the most important components of analysis work generally is knowing your data well. The exploratory and descriptive analyses will inform you on whether you data meet your model assumptions and, if not, what data transformations or amendments to your model should be made. Note that it is acceptable to identify areas where the data may not meet the model assumptions, note them, and move on. In other words, you do not have to address everything you find, but they should be noted in the limitations section of your writeup.
 
-```{r}
-
-```
-
-
-
-# Model assumptions
->check the spread of responses
-
 ##RMPI
 ```{r}
-#histogram/distribution faceted by timepoint
+# Original data - Histogram/distribution faceted by timepoint
 data_filt %>% 
   filter(scale_name == "RMPI") %>% 
   ggplot(aes(x = score)) +
   geom_histogram(fill = "#61adff",
                  color = "white") +
-  facet_wrap(~time) #A lot of 0s - similar patterns at all of the timepoints. This is the outcome variable, so not going to transform it. Perhaps a zero-inflated model would be more appropriate. 
+  facet_wrap(~time) #A lot of 0s - similar patterns at all of the timepoints. Perhaps a zero-inflated model would be more appropriate. 
 
 ##average RMPIs at each timepoint
 data_filt %>% 
   filter(scale_name == "RMPI")  %>% 
   group_by(time) %>% 
   summarise(mean(score, na.rm = T)) 
-
 ##PLOT: average RMPIs at each timepoint
 data_filt %>% 
   filter(scale_name == "RMPI")  %>% 
@@ -235,6 +238,30 @@ data_filt %>%
   ggplot(aes(x = time, y = rmpi_mean)) +
   geom_col(aes(fill = time))   
 
+## Imputed data - Histogram/distribution faceted by timepoint & averages
+new_imp %>% 
+  ggplot(aes(x = rmpi_imp)) +
+  geom_histogram(fill = "#61adff",
+                 color = "white") +
+ facet_wrap(~time) #still a bit skewed
+DescTools::Skew(new_imp$rmpi_imp) # skew = 0.94
+
+new_imp %>% 
+  group_by(time) %>% 
+  summarise(mean(rmpi_imp, na.rm = T)) ## aver%>% values are greater compared to the original data set with missing values
+
+mean(new_imp$rmpi_imp)
+range(new_imp$rmpi_imp)
+## Distribution of log transformed data
+new_imp %>% 
+  ggplot(aes(x = log10(1+rmpi_imp))) +
+  geom_histogram(fill = "#61adff",
+                 color = "white") +
+  facet_wrap(~time) ##looks a little better transformed
+
+new_imp<- new_imp %>% 
+  mutate(rmpi_log = log10(1+rmpi_imp))
+DescTools::Skew(new_imp$rmpi_log) #skew = -0.5, which is better than the previous one
 ```
 
 ##ULS-8
@@ -250,7 +277,7 @@ data_filt %>%
   ggplot(aes(x = score)) +
   geom_histogram() #mostly normal distribution
 
-##average ULS-8 at each timepoint
+##aver%>% ULS-8 at each timepoint
 data_filt %>% 
   filter(scale_name == "ULS-8")  %>% 
   group_by(time) %>% 
@@ -262,40 +289,198 @@ data_filt %>%
   summarise(uls_mean = mean(score, na.rm = T)) %>% 
   ggplot(aes(x = time, y = uls_mean)) +
   geom_col(aes(fill = time))   
+##average ULS at baseline
+data_filt %>% 
+  filter(scale_name == "ULS-8" & time == 2)  %>% 
+  summarise(mean(score, na.rm = T))  #2.070342
+
+## Imputed data - Histogram/distribution faceted by timepoint & averages
+new_imp %>% 
+  ggplot(aes(x = uls_8_imp)) +
+  geom_histogram(fill = "#61adff",
+                 color = "white") +
+ facet_wrap(~time) #pretty normal
+DescTools::Skew(new_imp$uls_8_imp) # skew = -0.20
+new_imp %>% 
+  group_by(time) %>% 
+  summarise(mean(uls_8_imp, na.rm = T))  
+mean(new_imp$uls_bl_imp) #2.078165, average values are close to the original data set with missing values
 ```
 
+## Demographic Descriptors
+```{r}
+demo <- data_l %>% 
+  select(age, sex, hispanic)
+
+demo <- demo[,-1]
+
+#change attribute labels
+var_label(demo$age) <- "Age"
+var_label(demo$sex) <- "Sex"
+var_label(demo$hispanic) <- "Hispanic"
+
+#simple table 
+tbl_summary(demo)
+
+age <- data %>% 
+  filter(scored_scale == "age")
+mean(age$score, na.rm = T) #18.03371
+sd(age$score, na.rm = T) #0.2789388
+
+sex <- data %>% 
+  filter(scored_scale == "sex") %>% 
+  select(score)
+sex %>% 
+  group_by(score) %>% 
+  count() #1 - 189 Females, 2 - 79 Males
+
+hispanic <- data %>% 
+  filter(scored_scale == "hispanic") %>% 
+  select(score)
+hispanic %>% 
+  group_by(score) %>% 
+  count() #0 - 225 , 1 - 43
+
+new_imp %>% 
+  select(sid) %>% 
+  unique() %>% 
+  count() #N = 270
+
+
+```
+
+## Models + Assumptions
+> There are some violations of assumptions, specifics normal distribution of the DV and the residuals. These assumptions were still violated when transforming the DV by log10. 
+
+```{r}
+# Model 1 
+## Normality 
+m1 <- lmer(rmpi_imp ~ time + (time|sid),
+            data = new_imp,
+            control = lmerControl(check.nobs.vs.nRE = "warning"))
+
+diagnostics_m1 <- augment(m1)
+ggplot(data = diagnostics_m1, mapping = aes(x = .resid)) +
+  geom_histogram(binwidth = .50) + theme_classic() + 
+  labs(title = "Histogram of Residuals",
+                      x = "Residual Value") +
+  geom_vline(xintercept = c(-2.5, 2.5), linetype = "dotted")
+shapiro.test(diagnostics_m1$.resid) #significant p-value --> normality violated
+
+m1_log <- lmer(rmpi_log ~ time + (time|sid),
+            data = new_imp,
+            control = lmerControl(check.nobs.vs.nRE = "warning"))
+
+diagnostics_m1_log <- augment(m1_log)
+ggplot(data = diagnostics_m1_log, mapping = aes(x = .resid)) +
+  geom_histogram(binwidth = .50) + theme_classic() + 
+  labs(title = "Histogram of Residuals",
+                      x = "Residual Value") +
+  geom_vline(xintercept = c(-2.5, 2.5), linetype = "dotted")
+shapiro.test(diagnostics_m1_log$.resid) #significant p-value --> normality violated.  Sticking with imputed data rather than transforming data
+
+##Normality of residuals
+lattice::qqmath(m1, id=0.05) #some violations
+lattice::qqmath(m1_log, id=0.05) #some violations
+
+# ## Model comparisons
+# performance::compare_performance(m1, m1_log)
+
+
+# Model 2
+## Normality 
+m2 <- lmer(rmpi_imp ~ uls_bl_imp + time + (time|sid),
+            data = new_imp,
+            control = lmerControl(check.nobs.vs.nRE = "warning"))
+diagnostics_m2 <- augment(m2)
+ggplot(data = diagnostics_m2, mapping = aes(x = .resid)) +
+  geom_histogram(binwidth = .50) + theme_classic() + 
+  labs(title = "Histogram of Residuals",
+                      x = "Residual Value") +
+  geom_vline(xintercept = c(-2.5, 2.5), linetype = "dotted")
+shapiro.test(diagnostics_m2$.resid) #significant p-value --> normality violated.
+
+m2_log <- lmer(rmpi_log ~ uls_bl_imp + time + (time|sid),
+            data = new_imp,
+            control = lmerControl(check.nobs.vs.nRE = "warning"))
+diagnostics_m2_log <- augment(m2_log)
+ggplot(data = diagnostics_m2_log, mapping = aes(x = .resid)) +
+  geom_histogram(binwidth = .50) + theme_classic() + 
+  labs(title = "Histogram of Residuals",
+                      x = "Residual Value") +
+  geom_vline(xintercept = c(-2.5, 2.5), linetype = "dotted")
+shapiro.test(diagnostics_m2_log$.resid) #significant p-value --> normality violated. Sticking with imputed data rather than transforming data
+
+##Normality of residuals
+lattice::qqmath(m2, id=0.05) #more normal than the model with transformed DV
+lattice::qqmath(m2_log, id=0.05) #more deviations than previous model
+
+# ## Model comparisons
+# performance::compare_performance(m2, m2_log)
+```
 
 #Analysis
 >Depending on your specific situation, you may engage in a model building process (starting with a baseline model and adding predictors) or you may have a specific model in mind a priori that you can directly estimate. In either case, the model should map directly to the research question and be properly specified. There are often judgments that must be made in your analysis and your decisions should be clear from the evidence. You can defend these judgments in your writeup, but failure to properly evaluate important decision points (e.g., whether a variable should randomly vary or not) without theoretical justification in the writeup will result in a loss of points.
 
 *Research Qs:*
->>*How does severity of problematic use at baseline predict the severity of problematic substance use at later timepoints and how does this vary between undergraduate students?*
-
-```{r}
-m0 <- lmer(RMPI ~ time + (1|SID),
-           data = data_l)
-arm::display(m0)
-```
-
 >>*How does severity of problematic substance use change over time, and vary within and between undergraduate students?*
-## Unable to test random effects of slope bc the number of observations is so low
 
 ```{r}
-# m1 <- lmer(RMPI ~ time + (time|SID),
-#            data = data_l)
-# 
+# m1 <- lmer(rmpi ~ time + (time|sid),
+#             data = data_l,
+#             control = lmerControl(check.nobs.vs.nRE = "warning"))
 # arm::display(m1)
+# m1_imp <- with(imp, lmer(rmpi ~ time + (time|sid),
+#                control = lmerControl(check.nobs.vs.nRE = "warning")))
+# summary(pool(m1_imp))
+
+m1 <- lmer(rmpi_imp ~ time + (time|sid),
+            data = new_imp,
+            control = lmerControl(check.nobs.vs.nRE = "warning"))
+arm::display(m1)
+
 ```
 
 >>*How does loneliness at an early timepoint predict problematic substance use throughout college and between students?*
 
 ```{r}
-m1 <- lmer(RMPI ~ ULS_BL + time + (1|SID),
-           data = data_l)
+m2 <- lmer(rmpi_imp ~ uls_bl_imp + time + (time|sid),
+            data = new_imp,
+            control = lmerControl(check.nobs.vs.nRE = "warning"))
+arm::display(m2_con)
+confint(m2)
+# install.packages("sjPlot")
+# library(sjPlot)
+tab_model(m2)
+tab_model(m2_log)
 
-arm::display(m1)
+
+m2_0 <- lmer(rmpi_imp ~ 0+ uls_bl_imp + time + (time|sid),
+            data = new_imp,
+            control = lmerControl(check.nobs.vs.nRE = "warning"))
+arm::display(m2_0)
+
+confint(m2_0)
+
+knitr::kable(arm::display(m2))
 ```
 
 
 #Plots
->You are required to create one plot from your model that communicates the coefficients, model predictions, or other features. You are welcome to include more than one, but at least one plot should be created.
+>Attempting to plot model 2 predictions with the raw data, however, receiving an error. 
+
+```{r}
+#library(stats)
+  
+# new_imp %>% 
+#   mutate(pred = predict(m2, newdata = new_imp)) %>% 
+#   ggplot(aes(time, rmpi_imp)) +
+#   geom_point(size = 3) +
+#   geom_line(aes(y = new_imp),
+#             color = "#67E0CF",
+#             size = 1.5) +
+#   scale_color_manual(values = c("#515C7C", "#414237", "#458E5C")) +
+#   guides(color = "none") +
+#   theme_minimal(20) 
+```
+
